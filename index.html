@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 动作交互可视化演示 · MediaPipe Pose</title>
+<!--
+  ════════════════════════════════════════════════════════════
+  AI 人体动作实时交互可视化演示（单文件版）
+  ────────────────────────────────────────────────────────────
+  使用方法：
+  1. 双击本文件，用 Chrome / Edge 浏览器打开（首次运行需联网加载
+     MediaPipe 姿态模型约 10MB，之后走浏览器缓存）。
+  2. 点击「开启摄像头」并允许权限，站到镜头前 1~2 米处。
+  3. 动作 → 特效：举手 → 星光 / 下蹲 → 飘花 / 站立 → 粒子。
+  4. 全部画面仅在本机浏览器内处理，不上传任何数据。
+  ════════════════════════════════════════════════════════════
+-->
+<style>
+  :root{
+    --bg1:#EAF5FF; --bg2:#F8FCFF;
+    --ink:#27455F; --ink2:#5B7A93;
+    --accent:#3E9BE9; --accent-d:#1F6FB2;
+    --line:#CBE4F7; --panel:rgba(255,255,255,.9);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    background:linear-gradient(160deg,var(--bg1),var(--bg2));
+    color:var(--ink); min-height:100vh; padding:18px 16px 30px;
+  }
+  .wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+
+  /* ── 顶栏 ── */
+  header.top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  h1{font-size:21px;display:flex;align-items:center;gap:10px;font-weight:700}
+  h1 .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#4AA8EF,#7FC3FF);
+    color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;letter-spacing:1px;
+    box-shadow:0 4px 12px rgba(62,155,233,.35)}
+  h1 .sub{font-size:12px;color:var(--ink2);font-weight:400}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{padding:4px 12px;border-radius:999px;font-size:12px;background:#fff;border:1px solid var(--line);color:var(--ink2)}
+  .chip.ok{background:#E5F6EC;border-color:#9BDDB6;color:#1E8E4E}
+  .chip.warn{background:#FFF4E0;border-color:#F5D08C;color:#B87817}
+  .chip.err{background:#FDEAEA;border-color:#F2A6A6;color:#C0392B}
+
+  /* ── 主区域 ── 单画布全屏场景 + 摄像头小窗 ── */
+  main.grid{display:block}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;overflow:hidden;
+    box-shadow:0 8px 24px rgba(80,140,200,.10);display:flex;flex-direction:column}
+  .panel-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;
+    border-bottom:1px solid var(--line);font-size:14px;font-weight:600}
+  .panel-head .hint{font-size:12px;color:var(--ink2);font-weight:400}
+
+  .stage{position:relative;aspect-ratio:16/9;background:#0a1628;overflow:hidden;border-radius:16px}
+  .stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .stage canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;will-change:transform}
+  #fxCanvas{will-change:transform}
+
+  /* 摄像头小窗 PiP */
+  .cam-pip{position:absolute;bottom:14px;right:14px;width:22%;min-width:140px;max-width:240px;
+    aspect-ratio:4/3;border-radius:12px;overflow:hidden;border:2px solid rgba(255,255,255,.3);
+    box-shadow:0 6px 20px rgba(0,0,0,.35);z-index:10;background:#000}
+  .cam-pip video,.cam-pip canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+  .cam-pip canvas{will-change:transform}
+  .cam-pip .pip-label{position:absolute;top:4px;left:6px;z-index:2;font-size:10px;color:rgba(255,255,255,.7);
+    background:rgba(0,0,0,.4);padding:1px 6px;border-radius:999px}
+
+  .mirror{transform:scaleX(-1)}
+
+  .cam-off{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:8px;background:rgba(10,22,40,.6);color:rgba(255,255,255,.8);
+    text-align:center;pointer-events:none}
+  .cam-off .ico{font-size:40px;filter:grayscale(.2)}
+  .cam-off .mini{font-size:12px;opacity:.7}
+  .load-tag{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:6;display:none;
+    padding:5px 14px;border-radius:999px;font-size:12px;color:#fff;
+    background:linear-gradient(135deg,#4AA8EF,#2E86C1);box-shadow:0 4px 10px rgba(62,155,233,.35)}
+
+  .fx-hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--ink2);font-size:14px;letter-spacing:1px;pointer-events:none;transition:opacity .5s}
+  .statusbar{flex-direction:row;align-items:center;justify-content:space-between;gap:12px;
+    padding:10px 16px;flex-wrap:wrap}
+  .sb-left{display:flex;align-items:center;gap:10px}
+  .sb-label{font-size:13px;color:var(--ink2)}
+  .action-badge{font-size:16px;font-weight:700;padding:7px 20px;border-radius:12px;color:var(--ink2);
+    background:#F3F9FE;border:1px solid var(--line);transition:all .25s;min-width:132px;text-align:center}
+  .action-badge.live{background:linear-gradient(135deg,#4AA8EF,#2E86C1);color:#fff;border-color:transparent;
+    box-shadow:0 6px 16px rgba(62,155,233,.35)}
+  .act-pills{display:flex;gap:8px;flex-wrap:wrap}
+  .pill{padding:7px 16px;border-radius:999px;font-size:13px;border:1px solid var(--line);
+    color:var(--ink2);background:#fff;transition:all .25s;user-select:none}
+  .pill.active{background:#E3F2FF;border-color:var(--accent);color:var(--accent-d);font-weight:700;
+    box-shadow:0 4px 10px rgba(62,155,233,.2)}
+  .stats{font-size:12px;color:var(--ink2);min-width:150px;text-align:right}
+
+  /* ── 控制栏 ── */
+  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px}
+  .btn{padding:9px 18px;border-radius:10px;font-size:14px;cursor:pointer;transition:all .2s;
+    font-family:inherit;border:1px solid transparent}
+  .btn:disabled{opacity:.55;cursor:not-allowed}
+  .btn.primary{background:linear-gradient(135deg,#4AA8EF,#2E86C1);color:#fff;
+    box-shadow:0 4px 12px rgba(62,155,233,.35)}
+  .btn.primary:hover{filter:brightness(1.06)}
+  .btn.ghost{background:#fff;border-color:var(--line);color:var(--ink)}
+  .btn.toggle.on{background:#E3F2FF;border-color:var(--accent);color:var(--accent-d);font-weight:600}
+  .slider-row{display:flex;align-items:center;gap:8px;flex:1;min-width:230px;font-size:13px;color:var(--ink2)}
+  .slider-row b{color:var(--accent-d);min-width:18px;text-align:center;font-size:15px}
+  input[type=range]{flex:1;accent-color:var(--accent);cursor:pointer}
+
+  /* ── 使用说明 ── */
+  footer.usage{padding:12px 16px 14px;font-size:13px;color:var(--ink2);line-height:1.9}
+  footer.usage>b{color:var(--ink)}
+  footer.usage ol{margin:4px 0 0 18px}
+  footer.usage b{color:var(--accent-d)}
+
+  /* ── 提示浮层 ── */
+  #toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,20px);z-index:99;
+    max-width:80vw;padding:10px 18px;border-radius:12px;background:rgba(39,69,95,.92);color:#fff;
+    font-size:13px;opacity:0;pointer-events:none;transition:all .3s}
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+
+  @media (max-width:920px){ main.grid{grid-template-columns:1fr} }
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1><span class="logo">AI</span>人体动作实时交互可视化<span class="sub">MediaPipe Pose · 本地运行</span></h1>
+    <div class="chips">
+      <span class="chip" id="chipCam">摄像头未开启</span>
+      <span class="chip" id="chipModel">模型未加载</span>
+      <span class="chip" id="chipFps">-- FPS</span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="panel">
+      <div class="panel-head"><span>🌊 动作交互场景</span><span class="hint" id="sceneLabel">海洋场景</span></div>
+      <div class="stage" id="stage">
+        <canvas id="fxCanvas"></canvas>
+        <div class="cam-pip" id="camPip">
+          <span class="pip-label">📹 摄像头</span>
+          <video id="video" playsinline muted></video>
+          <canvas id="skeletonCanvas"></canvas>
+          <div class="cam-off" id="camOff">
+            <div class="ico">📷</div>
+            <p class="mini">点击下方开启摄像头</p>
+          </div>
+          <div class="load-tag" id="loadTag">AI 模型加载中…</div>
+        </div>
+        <div class="fx-hint" id="fxHint">✨ 做出动作后，画面会绽放对应动画</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 动作状态栏 -->
+  <section class="panel statusbar">
+    <div class="sb-left">
+      <span class="sb-label">当前动作</span>
+      <span class="action-badge" id="actionBadge">💤 待机</span>
+    </div>
+    <div class="act-pills">
+      <span class="pill" data-state="raise">✋ 抬手 · 星光</span>
+      <span class="pill" data-state="squat">🌸 下蹲 · 飘花</span>
+      <span class="pill" data-state="sit">🪑 坐立 · 萤火</span>
+      <span class="pill" data-state="stand">🧍 站立 · 粒子</span>
+      <span class="pill" data-state="hands">🙏 合十 · 爱心</span>
+      <span class="pill" data-state="tpose">🤸 侧平举 · 光环</span>
+      <span class="pill" data-state="highknee">🦵 高抬腿 · 冲击波</span>
+      <span class="pill" data-state="jump">🎊 跳跃 · 彩屑</span>
+    </div>
+    <div class="stats" id="fxStats">粒子 0 · 推理 -- ms</div>
+  </section>
+
+  <!-- 控制栏 -->
+  <section class="panel controls">
+    <button class="btn primary" id="btnCam">开启摄像头</button>
+    <button class="btn ghost toggle on" id="btnMirror">🪞 画面镜像</button>
+    <button class="btn ghost toggle on" id="btnSkel">🦴 骨架显示</button>
+    <button class="btn ghost toggle" id="btnPerf">⚡ 流畅模式</button>
+    <div class="slider-row">
+      <span>识别灵敏度</span>
+      <input type="range" id="sens" min="1" max="10" value="5">
+      <b id="sensVal">5</b>
+    </div>
+  </section>
+
+  <!-- 场景选择 -->
+  <section class="panel controls">
+    <span class="sb-label">场景切换</span>
+    <button class="btn ghost toggle on scene-btn" data-scene="ocean">🌊 海洋</button>
+    <button class="btn ghost toggle scene-btn" data-scene="forest">🌲 森林</button>
+    <button class="btn ghost toggle scene-btn" data-scene="night">🌃 夜晚星空</button>
+  </section>
+
+  <!-- 使用说明 -->
+  <footer class="panel usage">
+    <b>使用说明</b>
+    <ol>
+      <li>双击 <b>打开演示.bat</b>（自动调用 Chrome / Edge）或直接双击 index.html 打开页面；首次运行需联网自动加载 MediaPipe 姿态模型（约 10MB，之后走浏览器缓存）。</li>
+      <li>点击「开启摄像头」并允许权限，站在镜头前约 <b>1~2 米</b>，尽量让上半身与膝盖完整入镜。</li>
+      <li>动作演示（8 种）：<b>举手过头 → 金色星光迸发</b>；<b>屈膝下蹲 → 樱花飘落</b>；<b>坐姿 → 萤火虫环绕</b>；<b>自然站立 → 粒子光晕</b>；<b>双手合十于胸前 → 爱心升腾</b>；<b>双臂侧平举 T 字 → 绿色光环波纹</b>；<b>高抬腿 → 脚下冲击波粒子</b>；<b>双脚起跳 → 彩色纸屑爆发</b>。</li>
+      <li>场景切换：点击<b>海洋</b>（气泡上浮）/ <b>森林</b>（落叶飘散）/ <b>夜晚星空</b>（繁星闪烁）切换不同背景与环境粒子效果。</li>
+      <li>「识别灵敏度」越高动作越容易触发；低配笔记本建议开启<b>流畅模式</b>（降低推理频率与粒子数量）。</li>
+      <li>画面仅在本机浏览器内实时处理，<b>不上传、不保存</b>，可放心演示。</li>
+    </ol>
+  </footer>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════════
+   0. 全局状态与工具
+   ════════════════════════════════════════════════════════════ */
+const POSE_VER = '0.5.1675469404';
+const POSE_CDNS = [
+  'https://cdn.jsdelivr.net/npm/@mediapipe/pose@' + POSE_VER + '/',
+  'https://unpkg.com/@mediapipe/pose@' + POSE_VER + '/'
+];
+let POSE_BASE = POSE_CDNS[0];
+
+const $ = id => document.getElementById(id);
+const video = $('video'), skelCv = $('skeletonCanvas'), fxCv = $('fxCanvas');
+const skelCtx = skelCv.getContext('2d');
+const fxCtx = fxCv.getContext('2d');
+
+let pose = null, poseReady = false, poseLoading = false;
+let cameraOn = false, stream = null, inferTimer = null, inferBusy = false, inferLatency = 0;
+let mirrored = true, showSkeleton = true, perfMode = false;
+let sensitivity = 0.44;                 // 灵敏度 1~10 → 0~1
+let state = 'none', cand = 'none', candT = 0;
+let latest = null;
+const anchors = { wrists: [], handsMid: { x: .5, y: .4 }, torso: { x: .5, y: .5 }, hip: { x: .5, y: .6 }, foot: null };
+let hipHist = [], jumpUntil = 0, lastJumpT = 0, lastRingT = 0;
+let currentScene = 'ocean';
+
+/* ── 场景定义 ── */
+const SCENES = {
+  ocean: { label: '海洋场景', bg: ['#0A4D8C','#1E88C7','#67B8E0','#B3D9F2'], ambient: 'bubble', ambientRate: 0.08, accent: '#4FC3F7', ffCol: '#A7FFEB' },
+  forest: { label: '森林场景', bg: ['#1B3A1B','#2E6B2E','#4A8B3A','#8FBC6F'], ambient: 'leaf', ambientRate: 0.06, accent: '#66BB6A', ffCol: '#FFEB3B' },
+  night: { label: '夜晚星空', bg: ['#080A1A','#0F1235','#1A1F4E','#2A2D5E'], ambient: 'twinkle', ambientRate: 0.05, accent: '#B48CF2', ffCol: '#E0E0FF' }
+};
+
+const STATE_META = {
+  raise:    { icon: '✋', label: '抬手 · 星光' },
+  squat:    { icon: '🌸', label: '下蹲 · 飘花' },
+  sit:      { icon: '🪑', label: '坐立 · 萤火' },
+  stand:    { icon: '🧍', label: '站立 · 粒子' },
+  hands:    { icon: '🙏', label: '合十 · 爱心' },
+  tpose:    { icon: '🤸', label: '侧平举 · 光环' },
+  highknee: { icon: '🦵', label: '高抬腿 · 冲击波' },
+  jump:     { icon: '🎊', label: '跳跃 · 彩屑' },
+  none:     { icon: '💤', label: '待机' }
+};
+
+function toast(msg, ms = 3400) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._tm); t._tm = setTimeout(() => t.classList.remove('show'), ms);
+}
+function setChip(el, text, cls) { el.textContent = text; el.className = 'chip' + (cls ? ' ' + cls : ''); }
+
+/* ════════════════════════════════════════════════════════════
+   1. 画布尺寸自适应（限制 DPR，低配优化）
+   ════════════════════════════════════════════════════════════ */
+const fxBg = document.createElement('canvas');
+function DPR() { return Math.min(window.devicePixelRatio || 1, perfMode ? 1 : 1.5); }
+function fit(cv) {
+  const r = cv.getBoundingClientRect();
+  const d = DPR();
+  const w = Math.max(2, Math.round(r.width * d)), h = Math.max(2, Math.round(r.height * d));
+  if (cv.width !== w || cv.height !== h) {
+    cv.width = w; cv.height = h;
+    if (cv === fxCv) buildFxBg();
+  }
+}
+function buildFxBg() {
+  const sc = SCENES[currentScene];
+  fxBg.width = fxCv.width; fxBg.height = fxCv.height;
+  const c = fxBg.getContext('2d');
+  const H = fxBg.height, W = fxBg.width;
+  const g = c.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, sc.bg[0]); g.addColorStop(.35, sc.bg[1]); g.addColorStop(.7, sc.bg[2]); g.addColorStop(1, sc.bg[3]);
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+
+  // 场景特定装饰
+  if (currentScene === 'ocean') {
+    // 水面波光
+    for (let i = 0; i < 6; i++) {
+      const y = H * (0.6 + i * 0.06);
+      const rg = c.createRadialGradient(W * Math.random(), y, 0, W * Math.random(), y, W * 0.15);
+      rg.addColorStop(0, 'rgba(180,230,255,.12)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = rg; c.fillRect(0, 0, W, H);
+    }
+  } else if (currentScene === 'forest') {
+    // 树影光斑
+    for (let i = 0; i < 8; i++) {
+      const bx = Math.random(), by = Math.random(), br = 0.08 + Math.random() * 0.12;
+      const rg = c.createRadialGradient(bx * W, by * H, 0, bx * W, by * H, br * W);
+      rg.addColorStop(0, 'rgba(200,255,180,.08)'); rg.addColorStop(1, 'rgba(200,255,180,0)');
+      c.fillStyle = rg; c.fillRect(0, 0, W, H);
+    }
+  } else if (currentScene === 'night') {
+    // 静态远景星
+    for (let i = 0; i < 40; i++) {
+      const sx = Math.random() * W, sy = Math.random() * H * 0.6;
+      const sr = Math.random() * 1.5 + 0.5;
+      c.fillStyle = 'rgba(255,255,255,' + (0.3 + Math.random() * 0.5) + ')';
+      c.beginPath(); c.arc(sx, sy, sr, 0, 6.29); c.fill();
+    }
+    // 月亮
+    const mx = W * 0.8, my = H * 0.2, mr = W * 0.06;
+    const mg = c.createRadialGradient(mx, my, 0, mx, my, mr * 2.5);
+    mg.addColorStop(0, 'rgba(255,255,240,.15)'); mg.addColorStop(1, 'rgba(255,255,240,0)');
+    c.fillStyle = mg; c.fillRect(0, 0, W, H);
+    c.fillStyle = 'rgba(255,255,235,.85)'; c.beginPath(); c.arc(mx, my, mr, 0, 6.29); c.fill();
+  }
+}
+/* 环境粒子（场景氛围） */
+const ambParts = [];
+function spawnAmbient() {
+  const sc = SCENES[currentScene];
+  const W = fxCv.width, H = fxCv.height;
+  if (sc.ambient === 'bubble') {
+    ambParts.push({ type: 'amb-bubble', x: Math.random() * W, y: H + 10,
+      vy: -(0.4 + Math.random() * 0.6), r: 3 + Math.random() * 8,
+      life: 1, decay: 0.003 + Math.random() * 0.002, ph: Math.random() * 6.28 });
+  } else if (sc.ambient === 'leaf') {
+    ambParts.push({ type: 'amb-leaf', x: Math.random() * W, y: -10,
+      vy: 0.3 + Math.random() * 0.5, vx: (Math.random() - 0.5) * 0.3,
+      r: 4 + Math.random() * 6, rot: Math.random() * 6.28, vr: (Math.random() - 0.5) * 0.05,
+      life: 1, decay: 0.002, ph: Math.random() * 6.28, fq: 0.5 + Math.random() });
+  } else if (sc.ambient === 'twinkle') {
+    if (Math.random() < 0.3) ambParts.push({ type: 'amb-star', x: Math.random() * W, y: Math.random() * H * 0.7,
+      r: 1 + Math.random() * 2.5, life: 1, decay: 0.008 + Math.random() * 0.01, ph: Math.random() * 6.28 });
+  }
+}
+function drawAmbient(now, dt) {
+  const sc = SCENES[currentScene];
+  for (let i = ambParts.length - 1; i >= 0; i--) {
+    const p = ambParts[i];
+    p.life -= p.decay * dt;
+    if (p.life <= 0) { ambParts.splice(i, 1); continue; }
+    if (p.type === 'amb-bubble') {
+      p.x += Math.sin(now * 0.001 + p.ph) * 0.3 * dt;
+      p.y += p.vy * dt;
+      if (p.y < -20) { ambParts.splice(i, 1); continue; }
+      fxCtx.globalAlpha = p.life * 0.4;
+      fxCtx.strokeStyle = 'rgba(200,240,255,.7)';
+      fxCtx.lineWidth = 1;
+      fxCtx.beginPath(); fxCtx.arc(p.x, p.y, p.r, 0, 6.29); fxCtx.stroke();
+    } else if (p.type === 'amb-leaf') {
+      p.x += (p.vx + Math.sin(now * 0.001 * p.fq + p.ph) * 0.5) * dt;
+      p.y += p.vy * dt; p.rot += p.vr * dt;
+      if (p.y > fxCv.height + 20) { ambParts.splice(i, 1); continue; }
+      fxCtx.globalAlpha = p.life * 0.6;
+      fxCtx.save(); fxCtx.translate(p.x, p.y); fxCtx.rotate(p.rot);
+      fxCtx.fillStyle = '#7CB342';
+      fxCtx.beginPath(); fxCtx.ellipse(0, 0, p.r, p.r * 0.4, 0, 0, 6.29); fxCtx.fill();
+      fxCtx.restore();
+    } else if (p.type === 'amb-star') {
+      const tw = 0.5 + 0.5 * Math.sin(now * 0.003 + p.ph);
+      fxCtx.globalAlpha = p.life * tw * 0.8;
+      fxCtx.fillStyle = '#fff';
+      fxCtx.beginPath(); fxCtx.arc(p.x, p.y, p.r, 0, 6.29); fxCtx.fill();
+    }
+  }
+  fxCtx.globalAlpha = 1;
+}
+function switchScene(scene) {
+  currentScene = scene;
+  const sc = SCENES[scene];
+  $('sceneLabel').textContent = sc.label;
+  document.querySelectorAll('.scene-btn').forEach(b => b.classList.toggle('on', b.dataset.scene === scene));
+  ambParts.length = 0;
+  buildFxBg();
+  toast('已切换到 ' + sc.label);
+}
+new ResizeObserver(() => { fit(skelCv); fit(fxCv); }).observe($('stage'));
+
+/* ════════════════════════════════════════════════════════════
+   2. 特效精灵图（预渲染，避免每帧绘制复杂图形）
+   ════════════════════════════════════════════════════════════ */
+function sprite(size, fn) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  fn(cv.getContext('2d'), size); return cv;
+}
+const SP = {
+  // 星光：金色四芒星 + 柔光
+  star: sprite(48, (c, s) => {
+    const m = s / 2; c.translate(m, m);
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, m);
+    g.addColorStop(0, 'rgba(255,214,140,.9)'); g.addColorStop(.5, 'rgba(255,178,80,.35)'); g.addColorStop(1, 'rgba(255,178,80,0)');
+    c.fillStyle = g; c.fillRect(-m, -m, s, s);
+    c.fillStyle = '#FFC24D'; c.beginPath();
+    const R = m * .92, r = m * .2;
+    for (let k = 0; k < 4; k++) {
+      const a1 = k * Math.PI / 2 - Math.PI / 2, a2 = a1 + Math.PI / 4;
+      c.lineTo(Math.cos(a1) * R, Math.sin(a1) * R);
+      c.lineTo(Math.cos(a2) * r, Math.sin(a2) * r);
+    }
+    c.closePath(); c.fill();
+    c.fillStyle = 'rgba(255,255,255,.95)'; c.beginPath(); c.arc(0, 0, m * .16, 0, 6.29); c.fill();
+  }),
+  // 飘花：粉色花瓣
+  petal: sprite(48, (c, s) => {
+    const m = s / 2; c.translate(m, m);
+    const g = c.createLinearGradient(0, -m, 0, m);
+    g.addColorStop(0, '#FFC3D4'); g.addColorStop(1, '#FF8FB0');
+    c.fillStyle = g; c.beginPath();
+    c.moveTo(0, -m * .42);
+    c.bezierCurveTo(m * .34, -m * .16, m * .28, m * .24, 0, m * .42);
+    c.bezierCurveTo(-m * .28, m * .24, -m * .34, -m * .16, 0, -m * .42);
+    c.fill();
+    c.strokeStyle = 'rgba(255,255,255,.55)'; c.lineWidth = 1.5; c.stroke();
+  }),
+  // 粒子：蓝色柔光球
+  orb: sprite(48, (c, s) => {
+    const m = s / 2;
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, m);
+    g.addColorStop(0, 'rgba(255,255,255,.95)');
+    g.addColorStop(.35, 'rgba(120,190,245,.65)');
+    g.addColorStop(1, 'rgba(90,170,240,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(0, 0, m, 0, 6.29); c.fill();
+  }),
+  // 爱心：粉色渐变 + 高光
+  heart: sprite(48, (c, s) => {
+    const m = s / 2; c.translate(m, m);
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, m);
+    g.addColorStop(0, 'rgba(255,138,168,.45)'); g.addColorStop(1, 'rgba(255,138,168,0)');
+    c.fillStyle = g; c.fillRect(-m, -m, s, s);
+    const h = c.createLinearGradient(0, -m * .45, 0, m * .45);
+    h.addColorStop(0, '#FF8FAC'); h.addColorStop(1, '#FF4D6D');
+    c.fillStyle = h; c.beginPath();
+    c.moveTo(0, m * .36);
+    c.bezierCurveTo(-m * .58, -m * .04, -m * .36, -m * .5, 0, -m * .18);
+    c.bezierCurveTo(m * .36, -m * .5, m * .58, -m * .04, 0, m * .36);
+    c.fill();
+    c.fillStyle = 'rgba(255,255,255,.55)';
+    c.beginPath(); c.ellipse(-m * .14, -m * .1, m * .07, m * .05, -.6, 0, 6.29); c.fill();
+  }),
+  // 萤火虫：柔光 + 发光核心（颜色由 draw 时动态覆盖）
+  firefly: sprite(48, (c, s) => {
+    const m = s / 2; c.translate(m, m);
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, m);
+    g.addColorStop(0, 'rgba(255,255,200,.9)'); g.addColorStop(.3, 'rgba(255,235,100,.4)'); g.addColorStop(1, 'rgba(255,235,100,0)');
+    c.fillStyle = g; c.fillRect(-m, -m, s, s);
+    c.fillStyle = 'rgba(255,255,220,.95)'; c.beginPath(); c.arc(0, 0, m * .18, 0, 6.29); c.fill();
+  })
+};
+
+/* ════════════════════════════════════════════════════════════
+   3. 粒子系统
+   ════════════════════════════════════════════════════════════ */
+const parts = [];
+const MAXP = () => perfMode ? 140 : 460;
+function addP(p) { if (parts.length < MAXP()) parts.push(p); }
+
+function spawnStar(x, y, burst) {
+  const a = Math.random() * Math.PI * 2;
+  const sp = burst ? (0.8 + Math.random() * 1.8) : (0.3 + Math.random() * 0.6);
+  addP({
+    type: 'star', x, y,
+    vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - (burst ? 1.1 : 0.55),
+    life: 1, decay: 0.012 + Math.random() * 0.012,
+    size: (burst ? 10 : 7) + Math.random() * 12,
+    rot: Math.random() * Math.PI, vr: (Math.random() - .5) * 0.1,
+    ph: Math.random() * 6.28
+  });
+}
+function spawnPetal(scatter) {
+  addP({
+    type: 'petal',
+    x: Math.random() * fxCv.width,
+    y: scatter ? -10 - Math.random() * fxCv.height * 0.35 : -14,
+    vx: 0, vy: 0.55 + Math.random() * 0.9,
+    life: 1, decay: 0.0018,
+    size: 11 + Math.random() * 12,
+    rot: Math.random() * 6.28, vr: (Math.random() - .5) * 0.05,
+    ph: Math.random() * 6.28, fq: 0.8 + Math.random() * 1.2
+  });
+}
+function spawnOrb(x, y) {
+  addP({
+    type: 'orb',
+    x: x + (Math.random() - .5) * 46, y: y + (Math.random() - .5) * 46,
+    vx: (Math.random() - .5) * 0.2, vy: -0.2 - Math.random() * 0.3,
+    life: 1, decay: 0.006,
+    size: 8 + Math.random() * 14, rot: 0, vr: 0, ph: Math.random() * 6.28
+  });
+}
+function burstStars() {
+  const W = fxCv.width, H = fxCv.height;
+  const pts = anchors.wrists.length ? anchors.wrists.map(p => ({ x: p.x * W, y: p.y * H })) : [{ x: W / 2, y: H * 0.3 }];
+  pts.forEach(pt => { for (let i = 0; i < (perfMode ? 14 : 24); i++) spawnStar(pt.x, pt.y, true); });
+}
+function petalBurst() { for (let i = 0; i < (perfMode ? 18 : 32); i++) spawnPetal(true); }
+function auraBurst() {
+  const W = fxCv.width, H = fxCv.height;
+  const cx = anchors.torso.x * W, cy = anchors.torso.y * H;
+  const n = perfMode ? 10 : 16;
+  for (let i = 0; i < n; i++) {
+    const a = Math.PI * 2 * i / n;
+    addP({
+      type: 'orb', x: cx + Math.cos(a) * W * .07, y: cy + Math.sin(a) * H * .07,
+      vx: Math.cos(a) * .3, vy: -.25 - Math.random() * .2,
+      life: 1, decay: .008, size: 10 + Math.random() * 12, rot: 0, vr: 0, ph: Math.random() * 6.28
+    });
+  }
+}
+
+/* ── 新增特效：爱心 / 光环波纹 / 彩色纸屑 ── */
+function spawnHeart(x, y) {
+  addP({
+    type: 'heart',
+    x: x + (Math.random() - .5) * 26, y: y + (Math.random() - .5) * 16,
+    vx: 0, vy: -0.5 - Math.random() * 0.8,
+    life: 1, decay: 0.006 + Math.random() * 0.004,
+    size: 13 + Math.random() * 13,
+    rot: (Math.random() - .5) * 0.5, vr: (Math.random() - .5) * 0.02,
+    ph: Math.random() * 6.28, fq: 0.9 + Math.random() * 1.1
+  });
+}
+function spawnRing(x, y, col) {
+  addP({ type: 'ring', x, y, r: 8, vr: 1.5 + Math.random() * 1.2,
+    life: 1, decay: 0.016, col, lw: 2 + Math.random() * 2,
+    size: 0, rot: 0, ph: 0 });
+}
+function ringBurst(x, y, col) {
+  const n = perfMode ? 2 : 3;
+  for (let i = 0; i < n; i++) {
+    addP({ type: 'ring', x, y, r: 8 + i * 14, vr: 2.2 - i * 0.5,
+      life: 1, decay: 0.014, col, lw: 3 - i * 0.6,
+      size: 0, rot: 0, ph: 0 });
+  }
+}
+const CONF_COLORS = ['#3E9BE9', '#FF7AA2', '#FFC24D', '#5BD6A9', '#B48CF2'];
+function confettiBurst(x, y) {
+  const n = perfMode ? 32 : 60;
+  for (let i = 0; i < n; i++) {
+    addP({
+      type: 'conf', x, y,
+      vx: (Math.random() - .5) * 3.4, vy: -(1.6 + Math.random() * 2.4),
+      life: 1, decay: 0.006 + Math.random() * 0.004,
+      size: 5 + Math.random() * 6,
+      rot: Math.random() * 6.28, vr: (Math.random() - .5) * 0.3,
+      col: CONF_COLORS[(Math.random() * CONF_COLORS.length) | 0], ph: Math.random() * 6.28
+    });
+  }
+}
+function heartBurst() {
+  const pt = anchors.handsMid;
+  for (let i = 0; i < (perfMode ? 8 : 14); i++) spawnHeart(pt.x * fxCv.width, pt.y * fxCv.height);
+}
+/* 萤火虫：场景感知色，环绕身体浮动 */
+function spawnFirefly(x, y) {
+  const sc = SCENES[currentScene];
+  addP({
+    type: 'firefly', x: x + (Math.random() - .5) * 60, y: y + (Math.random() - .5) * 40,
+    vx: (Math.random() - .5) * 0.4, vy: -(0.1 + Math.random() * 0.3),
+    life: 1, decay: 0.004 + Math.random() * 0.003,
+    size: 10 + Math.random() * 14,
+    rot: 0, vr: 0, ph: Math.random() * 6.28, fq: 0.5 + Math.random(),
+    col: sc.ffCol
+  });
+}
+function fireflyBurst() {
+  const tx = anchors.torso.x * fxCv.width, ty = anchors.torso.y * fxCv.height;
+  const n = perfMode ? 10 : 18;
+  for (let i = 0; i < n; i++) {
+    const a = Math.PI * 2 * i / n, r = 30 + Math.random() * 40;
+    spawnFirefly(tx + Math.cos(a) * r, ty + Math.sin(a) * r * 0.6);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   4. 动画渲染主循环（与推理解耦，保证 60fps）
+   ════════════════════════════════════════════════════════════ */
+let lastT = performance.now(), fpsCnt = 0, fpsT = lastT, fxInfoT = 0, frameSkip = 0, lowFpsStreak = 0, autoPerfNotified = false;
+function fxLoop(now) {
+  const dt = Math.min(33, now - lastT) / 16.67; lastT = now;
+  fit(fxCv);
+  const W = fxCv.width, H = fxCv.height;
+
+  // 流畅模式跳帧：奇数帧只画背景+已有粒子，不生成新粒子
+  const canSpawn = !perfMode || (frameSkip++ & 1) === 0;
+  fxCtx.drawImage(fxBg, 0, 0);
+
+  // 环境粒子（场景氛围）
+  if (canSpawn) {
+    const sc = SCENES[currentScene];
+    const rate = perfMode ? sc.ambientRate * 0.5 : sc.ambientRate;
+    if (Math.random() < rate * 2) spawnAmbient();
+  }
+  drawAmbient(now, dt);
+
+  // 按当前动作持续生成特效
+  if (canSpawn) {
+    const sr = perfMode ? 0.18 : 0.35;
+    if (state === 'raise') for (const p of anchors.wrists) if (Math.random() < sr) spawnStar(p.x * W, p.y * H, false);
+    if (state === 'squat' && Math.random() < (perfMode ? 0.3 : 0.55)) { spawnPetal(false); if (!perfMode && Math.random() < 0.5) spawnPetal(false); }
+    if (state === 'sit' && Math.random() < (perfMode ? 0.12 : 0.25)) spawnFirefly(anchors.torso.x * W, anchors.torso.y * H);
+    if (state === 'stand' && Math.random() < (perfMode ? 0.1 : 0.18)) spawnOrb(anchors.torso.x * W, anchors.torso.y * H);
+    if (state === 'hands' && Math.random() < (perfMode ? 0.15 : 0.3)) spawnHeart(anchors.handsMid.x * W, anchors.handsMid.y * H);
+    if (state === 'tpose' && now - lastRingT > (perfMode ? 900 : 600)) { lastRingT = now; ringBurst(anchors.torso.x * W, anchors.torso.y * H, SCENES[currentScene].accent); }
+    if (state === 'highknee' && anchors.foot && Math.random() < (perfMode ? 0.2 : 0.4)) {
+      const fx = anchors.foot.x * W, fy = anchors.foot.y * H;
+      for (let k = 0; k < (perfMode ? 3 : 6); k++) {
+        const a = Math.PI + (Math.random() - .5) * Math.PI;
+        addP({ type: 'orb', x: fx, y: fy, vx: Math.cos(a) * (1 + Math.random()), vy: Math.sin(a) * (1 + Math.random()) - .5,
+          life: 1, decay: .02, size: 8 + Math.random() * 10, rot: 0, vr: 0, ph: Math.random() * 6.28 });
+      }
+    }
+    if (state === 'jump' && Math.random() < (perfMode ? 0.15 : 0.3)) {
+      const cx = anchors.hip.x * W;
+      for (let k = 0; k < (perfMode ? 1 : 4); k++) confettiBurst(cx + (Math.random() - .5) * W * .3, H * .3 + Math.random() * H * .2);
+    }
+  }
+
+  // 更新 & 绘制粒子
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.life -= p.decay * dt;
+    if (p.life <= 0 || p.y > H + 50 || p.y < -80) { parts.splice(i, 1); continue; }
+    if (p.type === 'petal') {
+      p.x += Math.sin(now * 0.001 * p.fq + p.ph) * 0.6 * dt;
+      p.y += p.vy * dt; p.rot += p.vr * dt;
+    } else if (p.type === 'star') {
+      p.vx *= Math.pow(0.985, dt); p.vy = p.vy * Math.pow(0.985, dt) - 0.008 * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+    } else if (p.type === 'ring') {
+      p.r += p.vr * dt; p.vr *= Math.pow(0.99, dt);
+    } else if (p.type === 'conf') {
+      p.vy += 0.05 * dt; p.vx *= Math.pow(0.99, dt);
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
+    } else if (p.type === 'heart') {
+      p.x += Math.sin(now * 0.001 * p.fq + p.ph) * 0.3 * dt;
+      p.y += p.vy * dt; p.vy *= Math.pow(0.99, dt); p.rot += p.vr * dt;
+    } else if (p.type === 'firefly') {
+      p.vx += (Math.random() - .5) * 0.04 * dt;
+      p.vy += (Math.random() - .5) * 0.04 * dt;
+      p.vx *= Math.pow(0.97, dt); p.vy *= Math.pow(0.97, dt);
+      p.x += (p.vx + Math.sin(now * 0.001 * p.fq + p.ph) * 0.3) * dt;
+      p.y += (p.vy + Math.cos(now * 0.0008 * p.fq + p.ph) * 0.2) * dt;
+    } else {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+    }
+    const tw = (p.type === 'star') ? (0.65 + 0.35 * Math.sin(now * 0.012 + p.ph))
+      : (p.type === 'firefly') ? (0.4 + 0.6 * (0.5 + 0.5 * Math.sin(now * 0.004 + p.ph))) : 1;
+    fxCtx.globalAlpha = Math.max(0, Math.min(1, p.life)) * tw;
+    let s = p.size;
+    if (p.type === 'star') s *= 0.5 + 0.5 * p.life;
+    if (p.type === 'orb') s *= 1.4 - 0.4 * p.life;
+    if (p.type === 'ring') {
+      fxCtx.beginPath(); fxCtx.arc(p.x, p.y, p.r, 0, 6.29);
+      fxCtx.lineWidth = p.lw; fxCtx.strokeStyle = p.col;
+      fxCtx.globalAlpha = Math.max(0, p.life) * 0.8; fxCtx.stroke();
+      continue;
+    }
+    if (p.type === 'conf') {
+      fxCtx.save(); fxCtx.translate(p.x, p.y); fxCtx.rotate(p.rot);
+      fxCtx.fillStyle = p.col; fxCtx.fillRect(-s / 2, -s / 4, s, s / 2); fxCtx.restore();
+      continue;
+    }
+    if (p.type === 'firefly') {
+      // 场景色光晕 + 精灵核心
+      const old = fxCtx.globalCompositeOperation;
+      fxCtx.globalCompositeOperation = 'lighter';
+      fxCtx.drawImage(SP.firefly, p.x - s / 2, p.y - s / 2, s, s);
+      fxCtx.globalCompositeOperation = old;
+      continue;
+    }
+    if (p.rot) {
+      fxCtx.save(); fxCtx.translate(p.x, p.y); fxCtx.rotate(p.rot);
+      fxCtx.drawImage(SP[p.type], -s / 2, -s / 2, s, s); fxCtx.restore();
+    } else {
+      fxCtx.drawImage(SP[p.type], p.x - s / 2, p.y - s / 2, s, s);
+    }
+  }
+  fxCtx.globalAlpha = 1;
+
+  // FPS 统计 + 自适应低帧率检测
+  fpsCnt++;
+  if (now - fpsT >= 1000) {
+    setChip($('chipFps'), fpsCnt + ' FPS', cameraOn ? (fpsCnt < 25 ? 'warn' : 'ok') : '');
+    // 连续 3 秒 FPS < 25 且未开启流畅模式 → 自动提示
+    if (cameraOn && !perfMode) {
+      if (fpsCnt < 25) {
+        lowFpsStreak++;
+        if (lowFpsStreak >= 3 && !autoPerfNotified) {
+          autoPerfNotified = true;
+          toast('检测到帧率偏低，已建议开启「流畅模式」以提升体验', 5000);
+          $('btnPerf').style.animation = 'pulse 1.2s ease 2';
+        }
+      } else { lowFpsStreak = 0; }
+    } else { lowFpsStreak = 0; }
+    fpsCnt = 0; fpsT = now;
+  }
+  // 面板信息（节流）
+  if (now - fxInfoT > 400) {
+    fxInfoT = now;
+    $('fxStats').textContent = '粒子 ' + parts.length + (cameraOn && inferLatency ? ' · 推理 ' + Math.round(inferLatency) + ' ms' : '');
+    $('fxHint').style.opacity = parts.length ? 0 : 1;
+  }
+  requestAnimationFrame(fxLoop);
+}
+requestAnimationFrame(fxLoop);
+
+/* ════════════════════════════════════════════════════════════
+   5. 骨架绘制（object-fit: cover 对齐映射）
+   ════════════════════════════════════════════════════════════ */
+const CONN = [[0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],
+  [11,12],[11,13],[13,15],[15,17],[15,19],[15,21],[17,19],
+  [12,14],[14,16],[16,18],[16,20],[18,20],[11,23],[12,24],
+  [23,24],[23,25],[24,26],[25,27],[26,28],[27,29],[28,30],
+  [29,31],[30,32],[27,31],[28,32]];
+function drawSkeleton(lm) {
+  fit(skelCv);
+  const W = skelCv.width, H = skelCv.height, c = skelCtx;
+  c.clearRect(0, 0, W, H);
+  if (!lm || !showSkeleton || !cameraOn) return;
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const sc = Math.max(W / vw, H / vh), dw = vw * sc, dh = vh * sc;
+  const ox = (W - dw) / 2, oy = (H - dh) / 2;
+  const px = i => ({ x: lm[i].x * dw + ox, y: lm[i].y * dh + oy, v: lm[i].visibility || 0 });
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  // 流畅模式单通道描边，非流畅模式双通道（深蓝底 + 白色芯）
+  const passes = perfMode ? [[1.6, 'rgba(255,255,255,.92)']] : [[2.2, 'rgba(31,111,178,.35)'], [1.0, 'rgba(255,255,255,.92)']];
+  for (const [k, col] of passes) {
+    c.lineWidth = W * .004 * k; c.strokeStyle = col; c.beginPath();
+    for (const [a, b] of CONN) {
+      if ((lm[a].visibility || 0) > .4 && (lm[b].visibility || 0) > .4) {
+        const A = px(a), B = px(b); c.moveTo(A.x, A.y); c.lineTo(B.x, B.y);
+      }
+    }
+    c.stroke();
+  }
+  // 关键点
+  for (const i of [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
+    const P = px(i); if (P.v < .4) continue;
+    const hand = (i === 15 || i === 16);
+    c.beginPath(); c.arc(P.x, P.y, hand ? W * .013 : W * .009, 0, 6.29);
+    c.fillStyle = hand ? 'rgba(255,193,77,.95)' : 'rgba(255,255,255,.95)'; c.fill();
+    c.lineWidth = 2; c.strokeStyle = 'rgba(62,155,233,.95)'; c.stroke();
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   6. 动作判定：抬手 / 下蹲 / 站立（带防抖与灵敏度映射）
+   ════════════════════════════════════════════════════════════ */
+function angleAt(a, b, c) {
+  const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
+  const d = (v1x * v2x + v1y * v2y) / ((Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y)) || 1);
+  return Math.acos(Math.max(-1, Math.min(1, d))) * 180 / Math.PI;
+}
+function setState(next, immediate) {
+  const now = performance.now();
+  if (next === state) { cand = state; candT = now; return; }
+  if (next !== cand) { cand = next; candT = now; }
+  const hold = immediate ? 0 : (340 - sensitivity * 180);
+  if (now - candT >= hold) commit(next);
+}
+function commit(next) {
+  state = next;
+  document.querySelectorAll('.pill').forEach(el =>
+    el.classList.toggle('active', el.dataset.state === state));
+  const badge = $('actionBadge');
+  badge.textContent = STATE_META[state].icon + ' ' + STATE_META[state].label;
+  badge.classList.toggle('live', state !== 'none');
+  if (state === 'raise') burstStars();
+  else if (state === 'squat') petalBurst();
+  else if (state === 'sit') fireflyBurst();
+  else if (state === 'stand') auraBurst();
+  else if (state === 'hands') heartBurst();
+  else if (state === 'tpose') ringBurst(anchors.torso.x * fxCv.width, anchors.torso.y * fxCv.height, '#5BD6A9');
+  else if (state === 'highknee') {
+    // 高抬腿冲击波：脚部爆发粒子
+    const W = fxCv.width, H = fxCv.height;
+    if (anchors.foot) for (let k = 0; k < (perfMode ? 12 : 20); k++) {
+      const a = Math.PI + (Math.random() - .5) * Math.PI;
+      addP({ type: 'orb', x: anchors.foot.x * W, y: anchors.foot.y * H,
+        vx: Math.cos(a) * (1.5 + Math.random() * 2), vy: Math.sin(a) * (1.5 + Math.random() * 2) - .5,
+        life: 1, decay: .015, size: 10 + Math.random() * 12, rot: 0, vr: 0, ph: Math.random() * 6.28 });
+    }
+  }
+  else if (state === 'jump') {
+    // 跳跃彩屑：从髋部向上爆发
+    const cx = anchors.hip.x * fxCv.width, cy = anchors.hip.y * fxCv.height;
+    confettiBurst(cx, cy);
+  }
+}
+function judge(lm) {
+  const vis = i => lm[i] ? (lm[i].visibility || 0) : 0;
+  // 人体可见性门槛：鼻、双肩、髋至少一侧
+  if (vis(0) < .5 || vis(11) < .5 || vis(12) < .5 || (vis(23) < .3 && vis(24) < .3)) { setState('none', true); return; }
+  const sx = (lm[11].x + lm[12].x) / 2, sy = (lm[11].y + lm[12].y) / 2;
+  const hx = (lm[23].x + lm[24].x) / 2, hy = (lm[23].y + lm[24].y) / 2;
+  const torso = Math.hypot(sx - hx, sy - hy);
+  if (torso < .07) { setState('none', true); return; }
+
+  const margin = .02 + (1 - sensitivity) * .05;
+
+  // 抬手：手腕高于鼻子
+  const upL = vis(15) > .5 && lm[15].y < lm[0].y - margin;
+  const upR = vis(16) > .5 && lm[16].y < lm[0].y - margin;
+
+  // 下蹲：膝关节夹角变小
+  const kA = [];
+  if (vis(23) > .5 && vis(25) > .5 && vis(27) > .5) kA.push(angleAt(lm[23], lm[25], lm[27]));
+  if (vis(24) > .5 && vis(26) > .5 && vis(28) > .5) kA.push(angleAt(lm[24], lm[26], lm[28]));
+  const knee = kA.length ? kA.reduce((a, b) => a + b) / kA.length : null;
+  const squat = knee !== null && knee < (150 - sensitivity * 20);
+
+  // 坐立：髋部明显低于站立时的预期位置（躯干上半段距离/髋膝距离比值异常）
+  // 简化判定：髋部 y 坐标比肩部低超过躯干长度的 0.55 倍，且膝角很小（接近坐姿）
+  const isSitting = knee !== null && knee < (120 - sensitivity * 15) &&
+    (hy - sy) > torso * 0.55;
+
+  // 双手合十：双手在身体中线附近且高度接近胸口
+  const handsTogether = vis(15) > .5 && vis(16) > .5 &&
+    Math.hypot(lm[15].x - lm[16].x, lm[15].y - lm[16].y) < torso * 0.35 &&
+    lm[15].y > sy - torso * 0.3 && lm[15].y < hy + torso * 0.2 &&
+    lm[16].y > sy - torso * 0.3 && lm[16].y < hy + torso * 0.2;
+
+  // 侧平举 T-Pose：双臂水平伸展，手腕与肩同高且远离躯干
+  const armHorizL = vis(15) > .5 && Math.abs(lm[15].y - lm[11].y) < torso * 0.25 &&
+    Math.abs(lm[15].x - lm[11].x) > torso * 0.6;
+  const armHorizR = vis(16) > .5 && Math.abs(lm[16].y - lm[12].y) < torso * 0.25 &&
+    Math.abs(lm[16].x - lm[12].x) > torso * 0.6;
+  const tpose = armHorizL && armHorizR;
+
+  // 高抬腿：膝盖高于髋部
+  const kneeHighL = vis(25) > .5 && lm[25].y < hy - torso * 0.15;
+  const kneeHighR = vis(26) > .5 && lm[26].y < hy - torso * 0.15;
+  const highknee = kneeHighL || kneeHighR;
+
+  // 跳跃：髋部整体上移（用历史均值为基准检测快速上升）
+  const now = performance.now();
+  hipHist.push({ t: now, y: hy });
+  while (hipHist.length > 2 && now - hipHist[0].t > 600) hipHist.shift();
+  let jumped = false;
+  if (hipHist.length >= 3) {
+    const avg = hipHist.reduce((s, h) => s + h.y, 0) / hipHist.length;
+    if (hy < avg - torso * 0.18 && now - lastJumpT > 1200) {
+      jumped = true; lastJumpT = now;
+    }
+  }
+
+  // 更新特效锚点（归一化坐标）
+  anchors.wrists = [];
+  if (vis(15) > .3) anchors.wrists.push({ x: lm[15].x, y: lm[15].y });
+  if (vis(16) > .3) anchors.wrists.push({ x: lm[16].x, y: lm[16].y });
+  anchors.torso = { x: sx, y: (sy + hy) / 2 };
+  anchors.hip = { x: hx, y: hy };
+  if (vis(15) > .3 && vis(16) > .3) {
+    anchors.handsMid = { x: (lm[15].x + lm[16].x) / 2, y: (lm[15].y + lm[16].y) / 2 };
+  }
+  // 高抬腿时取抬起的脚踝位置
+  if (kneeHighL && vis(27) > .3) anchors.foot = { x: lm[27].x, y: lm[27].y };
+  else if (kneeHighR && vis(28) > .3) anchors.foot = { x: lm[28].x, y: lm[28].y };
+  else anchors.foot = null;
+
+  // 优先级判定：跳跃 > 高抬腿 > 合十 > 侧平举 > 坐立 > 下蹲 > 抬手 > 站立
+  let result = 'stand';
+  if (jumped) result = 'jump';
+  else if (highknee) result = 'highknee';
+  else if (handsTogether) result = 'hands';
+  else if (tpose) result = 'tpose';
+  else if (isSitting) result = 'sit';
+  else if (squat) result = 'squat';
+  else if (upL || upR) result = 'raise';
+  setState(result);
+}
+
+/* ════════════════════════════════════════════════════════════
+   7. MediaPipe 姿态模型（双 CDN 自动回退）
+   ════════════════════════════════════════════════════════════ */
+function loadScript(url, timeout = 12000) {
+  return new Promise((ok, no) => {
+    const s = document.createElement('script');
+    const tm = setTimeout(() => { s.remove(); no(new Error('timeout')); }, timeout);
+    s.src = url;
+    s.onload = () => { clearTimeout(tm); ok(); };
+    s.onerror = () => { clearTimeout(tm); s.remove(); no(new Error('load fail')); };
+    document.head.appendChild(s);
+  });
+}
+async function initPose() {
+  if (poseLoading || poseReady) return;
+  poseLoading = true;
+  setChip($('chipModel'), '模型加载中…', 'warn');
+  $('loadTag').style.display = 'block';
+  try {
+    if (typeof Pose === 'undefined') {
+      let loaded = false, lastErr = null;
+      for (const base of POSE_CDNS) {
+        try { await loadScript(base + 'pose.js'); POSE_BASE = base; loaded = true; break; }
+        catch (e) { lastErr = e; }
+      }
+      if (!loaded) throw lastErr || new Error('CDN 不可用');
+    }
+    pose = new Pose({ locateFile: f => POSE_BASE + f });
+    pose.setOptions({
+      modelComplexity: 0,        // lite 模型，低配友好
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: .5,
+      minTrackingConfidence: .5
+    });
+    pose.onResults(onResults);
+    await pose.initialize();
+    poseReady = true;
+    setChip($('chipModel'), '模型就绪', 'ok');
+    $('loadTag').style.display = 'none';
+  } catch (e) {
+    setChip($('chipModel'), '模型加载失败', 'err');
+    $('loadTag').textContent = '模型加载失败，请检查网络后刷新重试';
+    toast('AI 模型加载失败：请确认电脑已联网（首次运行需下载模型），然后刷新页面重试', 5000);
+  }
+  poseLoading = false;
+}
+function onResults(res) {
+  latest = res.poseLandmarks || null;
+  drawSkeleton(latest);
+  if (latest) judge(latest); else setState('none', true);
+}
+
+/* ════════════════════════════════════════════════════════════
+   8. 推理循环（与渲染解耦 + 自适应节流）
+   ════════════════════════════════════════════════════════════ */
+function scheduleInfer() {
+  if (!cameraOn) return;
+  const base = perfMode ? 100 : 35;
+  inferTimer = setTimeout(runInfer, Math.max(base, inferLatency * 1.3));
+}
+async function runInfer() {
+  if (!cameraOn) return;
+  if (!inferBusy && video.readyState >= 2) {
+    inferBusy = true;
+    const t0 = performance.now();
+    try { await pose.send({ image: video }); } catch (e) { }
+    inferLatency = performance.now() - t0;
+    inferBusy = false;
+  }
+  scheduleInfer();
+}
+
+/* ════════════════════════════════════════════════════════════
+   9. 摄像头控制
+   ════════════════════════════════════════════════════════════ */
+async function startCamera() {
+  const btn = $('btnCam');
+  btn.disabled = true; btn.textContent = '加载 AI 模型…';
+  await initPose();
+  if (!poseReady) { btn.disabled = false; btn.textContent = '开启摄像头'; return; }
+  btn.textContent = '启动摄像头…';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    btn.disabled = false; btn.textContent = '开启摄像头';
+    toast('当前环境无法访问摄像头：请使用 Chrome / Edge 打开本页面；若仍失败，可尝试通过本地静态服务器访问');
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { width: { ideal: perfMode ? 320 : 640 }, height: { ideal: perfMode ? 240 : 480 }, facingMode: 'user' }
+    });
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '开启摄像头';
+    toast('无法访问摄像头：请在浏览器弹窗中允许权限，并确认摄像头未被其他程序占用');
+    return;
+  }
+  video.srcObject = stream;
+  try { await video.play(); } catch (_) { }
+  cameraOn = true;
+  $('camOff').style.display = 'none';
+  btn.textContent = '关闭摄像头';
+  setChip($('chipCam'), '摄像头运行中', 'ok');
+  scheduleInfer();
+  toast('摄像头已开启，试着举起双手或下蹲看看 ✨');
+}
+function stopCamera() {
+  cameraOn = false;
+  clearTimeout(inferTimer); inferTimer = null;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  video.srcObject = null;
+  latest = null; anchors.wrists = [];
+  setState('none', true);
+  skelCtx.clearRect(0, 0, skelCv.width, skelCv.height);
+  $('camOff').style.display = 'flex';
+  const btn = $('btnCam'); btn.textContent = '开启摄像头'; btn.disabled = false;
+  setChip($('chipCam'), '摄像头未开启', '');
+}
+$('btnCam').addEventListener('click', () => cameraOn ? stopCamera() : startCamera());
+
+/* ════════════════════════════════════════════════════════════
+   10. 配套控制：镜像 / 骨架 / 灵敏度 / 流畅模式
+   ════════════════════════════════════════════════════════════ */
+function applyMirror() {
+  [video, skelCv].forEach(el => el.classList.toggle('mirror', mirrored));
+  $('btnMirror').classList.toggle('on', mirrored);
+}
+$('btnMirror').addEventListener('click', () => { mirrored = !mirrored; applyMirror(); });
+$('btnSkel').addEventListener('click', () => {
+  showSkeleton = !showSkeleton;
+  $('btnSkel').classList.toggle('on', showSkeleton);
+  if (!showSkeleton) skelCtx.clearRect(0, 0, skelCv.width, skelCv.height);
+});
+$('btnPerf').addEventListener('click', () => {
+  perfMode = !perfMode;
+  $('btnPerf').classList.toggle('on', perfMode);
+  autoPerfNotified = perfMode; // 开启后不再重复提示
+  $('btnPerf').style.animation = '';
+  fit(skelCv); fit(fxCv);
+  toast(perfMode ? '已开启流畅模式：降分辨率·降推理频率·跳帧渲染·精简骨架' : '已关闭流畅模式');
+});
+$('sens').addEventListener('input', e => {
+  const v = +e.target.value;
+  $('sensVal').textContent = v;
+  sensitivity = (v - 1) / 9;
+});
+
+/* 场景切换 */
+document.querySelectorAll('.scene-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchScene(btn.dataset.scene));
+});
+
+/* 页面不可见时暂停推理，省电省资源 */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearTimeout(inferTimer); inferTimer = null; }
+  else if (cameraOn) scheduleInfer();
+});
+
+/* ════════════════════════════════════════════════════════════
+   11. 启动：初始化画布 + 预加载模型
+   ════════════════════════════════════════════════════════════ */
+applyMirror();
+fit(skelCv); fit(fxCv);
+initPose();   // 后台预加载，不阻塞页面
+</script>
+</body>
+</html>
